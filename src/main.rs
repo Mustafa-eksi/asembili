@@ -59,7 +59,7 @@ enum Inst {
 }
 
 #[derive(Debug)]
-struct CPU {
+struct Cpu {
     program_memory: [Inst; PROGRAM_SIZE],
     tick: u32, // tick counter
     pc: usize, // program counter
@@ -73,9 +73,9 @@ struct CPU {
     heap: Vec<i32>,
 }
 
-impl Default for CPU {
+impl Default for Cpu {
     fn default() -> Self {
-        CPU {
+        Cpu {
             program_memory: [Inst::Exit; PROGRAM_SIZE],
             tick: 0, pc: 0, ra: 0, sp: 0, gp: 0, fp: 0,
             x: [0; REGISTER_COUNT],
@@ -84,7 +84,7 @@ impl Default for CPU {
     }
 }
 
-impl CPU {
+impl Cpu {
     fn run_inst(&mut self) {
         match self.program_memory[self.pc] {
             Inst::AddImmediate(reg, imm) => {
@@ -173,13 +173,11 @@ impl CPU {
             } else if line.trim() == "inst" {
                 println!("{}: {:?}", self.pc, self.program_memory[self.pc]);
             } else if line.trim() == "insts" {
-                let mut i = 0;
-                for inst in self.program_memory {
+                for (i, inst) in self.program_memory.into_iter().enumerate() {
                     if inst == Inst::Exit {
                         break;
                     }
                     println!("{}: {:?}", i, inst);
-                    i += 1;
                 }
             } else if line.trim() == "clear" {
                 print!("{esc}[2J{esc}[1;1H", esc = 27 as char);
@@ -192,10 +190,8 @@ impl CPU {
     }
 
     fn install_program(&mut self, program: Vec<Inst>) {
-        let mut pc = 0;
-        for inst in program {
+        for (pc, inst) in program.into_iter().enumerate() {
             self.program_memory[pc] = inst;
-            pc += 1;
         }
     }
 
@@ -219,7 +215,7 @@ impl CPU {
 }
 
 fn main() {
-    let mut cpu: CPU = CPU::default();
+    let mut cpu: Cpu = Cpu::default();
     cpu.install_program(vec![
     ]);
     cpu.run();
@@ -232,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_fibonacci() {
-        let mut cpu: CPU = CPU::default();
+        let mut cpu: Cpu = Cpu::default();
         cpu.install_program(vec![
             Inst::AddImmediate(0, 0),       // a
             Inst::AddImmediate(1, 1),       // b
@@ -249,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_memory() {
-        let mut cpu: CPU = CPU::default();
+        let mut cpu: Cpu = Cpu::default();
         cpu.install_program(vec![
             Inst::AddImmediate(0, 69), // val
             Inst::AddImmediate(1, 100), // addr
@@ -262,7 +258,7 @@ mod tests {
 
     #[test]
     fn test_rule110() {
-        let mut cpu: CPU = CPU::default();
+        let mut cpu: Cpu = Cpu::default();
         cpu.install_program(vec![
             Inst::AddImmediate(2, 1),       // First 1
             Inst::AddImmediate(3, 0),       // Addr
@@ -303,7 +299,7 @@ mod tests {
 
     #[test]
     fn test_and() {
-        let mut cpu = CPU::default();
+        let mut cpu = Cpu::default();
         cpu.install_program(vec![
             Inst::AddImmediate(0, 1),
             Inst::AddImmediate(1, 0),
@@ -325,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_or() {
-        let mut cpu = CPU::default();
+        let mut cpu = Cpu::default();
         cpu.install_program(vec![
             Inst::AddImmediate(0, 1),
             Inst::AddImmediate(1, 0),
@@ -347,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_xor() {
-        let mut cpu = CPU::default();
+        let mut cpu = Cpu::default();
         cpu.install_program(vec![
             Inst::AddImmediate(0, 1),
             Inst::AddImmediate(1, 0),
@@ -369,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_xor2() {
-        let mut cpu = CPU::default();
+        let mut cpu = Cpu::default();
         cpu.install_program(vec![
             Inst::AddImmediate(0, 1),
             Inst::AddImmediate(1, 0),
