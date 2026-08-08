@@ -58,19 +58,20 @@ enum Inst {
     Nop,
 }
 
+type RegisterType = u64;
 #[derive(Debug)]
 struct Cpu {
     program_memory: [Inst; PROGRAM_SIZE],
-    tick: u32, // tick counter
+    tick: RegisterType, // tick counter
     pc: usize, // program counter
-    ra: u32, // return address
-    sp: u32, // stack pointer
-    gp: u32, // global pointer
+    ra: RegisterType, // return address
+    sp: RegisterType, // stack pointer
+    gp: RegisterType, // global pointer
     // Skipping tp (thread pointer)
-    fp: u32, // frame pointer
-    x: [i32; REGISTER_COUNT], // general use registers
+    fp: RegisterType, // frame pointer
+    x: [RegisterType; REGISTER_COUNT], // general use registers
                     // TODO: introduce saved and temporary registers.
-    heap: Vec<i32>,
+    heap: Vec<RegisterType>,
 }
 
 impl Default for Cpu {
@@ -88,7 +89,7 @@ impl Cpu {
     fn run_inst(&mut self) {
         match self.program_memory[self.pc] {
             Inst::AddImmediate(reg, imm) => {
-                self.x[reg as usize] += imm as i32;
+                self.x[reg as usize] += imm as RegisterType;
             },
             Inst::Add(reg1, reg2, reg3) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize] + self.x[reg3 as usize];
@@ -118,7 +119,7 @@ impl Cpu {
                 self.x[reg1 as usize] = self.x[reg2 as usize] ^ self.x[reg3 as usize];
             },
             Inst::XorImm(reg1, reg2, imm) => {
-                self.x[reg1 as usize] = self.x[reg2 as usize] ^ imm as i32;
+                self.x[reg1 as usize] = self.x[reg2 as usize] ^ imm as RegisterType;
             },
             Inst::BranchLessEq(reg1, reg2, imm) => {
                 if self.x[reg1 as usize] <= self.x[reg2 as usize] {
@@ -126,7 +127,7 @@ impl Cpu {
                 }
             },
             Inst::Not(reg1, reg2) => {
-                self.x[reg1 as usize] = (!(self.x[reg2 as usize] as u64)) as i32;
+                self.x[reg1 as usize] = (!(self.x[reg2 as usize] as RegisterType)) as RegisterType;
             },
             Inst::And(reg1, reg2, reg3) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize] & self.x[reg3 as usize];
