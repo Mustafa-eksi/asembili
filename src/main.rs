@@ -2,6 +2,11 @@
 
 use std::io;
 use std::io::Write;
+use std::path::Path;
+use std::env;
+use std::fs;
+
+use goblin::{error, Object};
 
 // 64 KB is enough for everyone
 const HEAP_SIZE: usize = 64e3 as usize;
@@ -58,7 +63,7 @@ enum Inst {
     Nop,
 }
 
-type RegisterType = u64;
+type RegisterType = u32;
 #[derive(Debug)]
 struct Cpu {
     program_memory: [Inst; PROGRAM_SIZE],
@@ -215,12 +220,17 @@ impl Cpu {
     }
 }
 
-fn main() {
-    let mut cpu: Cpu = Cpu::default();
-    cpu.install_program(vec![
-    ]);
-    cpu.run();
-    cpu.dump();
+fn main() -> error::Result<()> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        panic!("Insufficent arguments");
+    }
+    let path = Path::new(args[1].as_str());
+    let buffer = fs::read(path)?;
+    if let Object::Elf(elf) = Object::parse(&buffer)? {
+        println!("{:?}", elf);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
