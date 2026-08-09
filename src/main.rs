@@ -6,12 +6,48 @@ use std::path::Path;
 use std::env;
 use std::fs;
 
-use goblin::{error, Object};
+use goblin::error;
+use goblin::elf::Elf;
 
 // 64 KB is enough for everyone
 const HEAP_SIZE: usize = 64e3 as usize;
 const PROGRAM_SIZE: usize = 1024;
-const REGISTER_COUNT: usize = 16;
+const REGISTER_COUNT: usize = 32;
+
+enum Registers {
+    Zero            = 0,
+    ReturnAddress   = 1,
+    StackPointer    = 2,
+    GlobalPointer   = 3,
+    ThreadPointer   = 4,
+    Temporary0      = 5,
+    Temporary1      = 6,
+    Temporary2      = 7,
+    FramePointer    = 8,
+    Saved1          = 9,
+    Argument0       = 10,
+    Argument1       = 11,
+    Argument2       = 12,
+    Argument3       = 13,
+    Argument4       = 14,
+    Argument5       = 15,
+    Argument6       = 16,
+    Argument7       = 17,
+    Saved2          = 18,
+    Saved3          = 19,
+    Saved4          = 20,
+    Saved5          = 21,
+    Saved6          = 22,
+    Saved7          = 23,
+    Saved8          = 24,
+    Saved9          = 25,
+    Saved10         = 26,
+    Saved11         = 27,
+    Temporary3      = 28,
+    Temporary4      = 29,
+    Temporary5      = 30,
+    Temporary6      = 31,
+}
 
 // https://en.wikipedia.org/wiki/RISC-V_instruction_listings
 // reg   = 1
@@ -34,7 +70,7 @@ enum Inst {
     Move(RegType, RegType),                             // reg (out), reg (in)
 
     // Arithmetic
-    AddImmediate(RegType, ImmType),                     // reg (out), imm
+    AddImmediate(RegType, RegType, ImmType),            // reg (out), reg (in), imm
     Add(RegType, RegType, RegType),                     // reg (out), reg (in), reg (in)
     Subtract(RegType, RegType, RegType),                // reg (out), reg (in), reg (in)
     Multiply(RegType, RegType, RegType),                // reg (out), reg (in), reg (in)
@@ -93,8 +129,8 @@ impl Default for Cpu {
 impl Cpu {
     fn run_inst(&mut self) {
         match self.program_memory[self.pc] {
-            Inst::AddImmediate(reg, imm) => {
-                self.x[reg as usize] += imm as RegisterType;
+            Inst::AddImmediate(reg1, reg2, imm) => {
+                self.x[reg1 as usize] = self.x[reg2 as usize] + imm as RegisterType;
             },
             Inst::Add(reg1, reg2, reg3) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize] + self.x[reg3 as usize];
@@ -208,14 +244,6 @@ impl Cpu {
         println!("Regs: {:?}", self.x);
         println!("Instructions: {:?}", &self.program_memory[0..32]);
         println!("Heap: {:?}", &self.heap[0..32]);
-        // for x in &self.heap[0..32] {
-        //     if *x == 1 {
-        //         print!("{}", x);
-        //     } else {
-        //         print!(" ");
-        //     }
-        // }
-        // println!();
         println!("---");
     }
 }
@@ -227,8 +255,17 @@ fn main() -> error::Result<()> {
     }
     let path = Path::new(args[1].as_str());
     let buffer = fs::read(path)?;
-    if let Object::Elf(elf) = Object::parse(&buffer)? {
-        println!("{:?}", elf);
+    let elf = Elf::parse(&buffer)?;
+    for section in elf.section_headers {
+        let name = elf.shdr_strtab.get_at(section.sh_name).unwrap();
+        println!("{}", name);
+        if name == ".text" {
+            let offset = section.sh_offset as usize;
+            println!("{:?}", &buffer[offset..offset+4]);
+            println!("{:x?}", u32::from_le_bytes(buffer[offset..offset+4].try_into().unwrap()));
+            // Correct!!
+        }
+        println!("--");
     }
     Ok(())
 }
@@ -241,13 +278,13 @@ mod tests {
     fn test_fibonacci() {
         let mut cpu: Cpu = Cpu::default();
         cpu.install_program(vec![
-            Inst::AddImmediate(0, 0),       // a
-            Inst::AddImmediate(1, 1),       // b
-            Inst::AddImmediate(4, 15),      // limit
+            Inst::AddImmediate(0, 0, 0),       // a
+            Inst::AddImmediate(1, 1, 1),       // b
+            Inst::AddImmediate(4, 4, 15),      // limit
             Inst::Add(2, 0, 1),             // c = a + b
             Inst::Move(0, 1),               // a = b
             Inst::Move(1, 2),               // b = c
-            Inst::AddImmediate(3, 1),       // i += 1
+            Inst::AddImmediate(3, 3, 1),       // i += 1
             Inst::BranchLessThan(3, 4, -5), // go up 4 if c < b
         ]);
         cpu.run();
@@ -258,8 +295,8 @@ mod tests {
     fn test_memory() {
         let mut cpu: Cpu = Cpu::default();
         cpu.install_program(vec![
-            Inst::AddImmediate(0, 69), // val
-            Inst::AddImmediate(1, 100), // addr
+            Inst::AddImmediate(0, 0, 69), // val
+            Inst::AddImmediate(1, 1, 100), // addr
             Inst::StoreWord(0, 0, 1),
             Inst::LoadWord(2, 0, 1),
         ]);
@@ -271,11 +308,11 @@ mod tests {
     fn test_rule110() {
         let mut cpu: Cpu = Cpu::default();
         cpu.install_program(vec![
-            Inst::AddImmediate(2, 1),       // First 1
-            Inst::AddImmediate(3, 0),       // Addr
+            Inst::AddImmediate(2, 2, 1),       // First 1
+            Inst::AddImmediate(3, 3, 0),       // Addr
             Inst::StoreWord(2, 0, 3),       // store
-            Inst::AddImmediate(0, 32),      // limit
-            Inst::AddImmediate(1, 1),       // start i from 1
+            Inst::AddImmediate(0, 0, 32),      // limit
+            Inst::AddImmediate(1, 1, 1),       // start i from 1
 
             // Outer Loop Start
             Inst::Xor(4, 4, 4),             // set j = 0
@@ -286,7 +323,7 @@ mod tests {
 
                 // Inner Loop start
                 Inst::Move(8, 4),
-                Inst::AddImmediate(8, 1),
+                Inst::AddImmediate(8, 8, 1),
                 Inst::LoadWord(7, 0, 8),
 
                 Inst::Xor(9, 6, 5),
@@ -297,10 +334,10 @@ mod tests {
 
                 Inst::Move(5, 6),
                 Inst::Move(6, 7),
-                Inst::AddImmediate(4, 1),       // j += 1
+                Inst::AddImmediate(4, 4, 1),       // j += 1
                 Inst::BranchLessEq(4, 1, -12), // go up if j < i (size)
 
-            Inst::AddImmediate(1, 1),       // i += 1
+            Inst::AddImmediate(1, 1, 1),       // i += 1
             Inst::BranchLessThan(1, 0, -19), // go up if i < limit
         ]);
         cpu.run();
@@ -312,14 +349,14 @@ mod tests {
     fn test_and() {
         let mut cpu = Cpu::default();
         cpu.install_program(vec![
-            Inst::AddImmediate(0, 1),
-            Inst::AddImmediate(1, 0),
+            Inst::AddImmediate(0, 0, 1),
+            Inst::AddImmediate(1, 1, 0),
             Inst::And(3, 1, 1),
             Inst::And(4, 1, 0),
             Inst::And(5, 0, 1),
             Inst::And(6, 0, 0),
-            Inst::AddImmediate(7, 5),
-            Inst::AddImmediate(8, 2),
+            Inst::AddImmediate(7, 7, 5),
+            Inst::AddImmediate(8, 8, 2),
             Inst::And(9, 7, 8),
         ]);
         cpu.run();
@@ -334,14 +371,14 @@ mod tests {
     fn test_or() {
         let mut cpu = Cpu::default();
         cpu.install_program(vec![
-            Inst::AddImmediate(0, 1),
-            Inst::AddImmediate(1, 0),
+            Inst::AddImmediate(0, 0, 1),
+            Inst::AddImmediate(1, 1, 0),
             Inst::Or(3, 1, 1),
             Inst::Or(4, 1, 0),
             Inst::Or(5, 0, 1),
             Inst::Or(6, 0, 0),
-            Inst::AddImmediate(7, 5),
-            Inst::AddImmediate(8, 2),
+            Inst::AddImmediate(7, 7, 5),
+            Inst::AddImmediate(8, 8, 2),
             Inst::Or(9, 7, 8),
         ]);
         cpu.run();
@@ -356,14 +393,14 @@ mod tests {
     fn test_xor() {
         let mut cpu = Cpu::default();
         cpu.install_program(vec![
-            Inst::AddImmediate(0, 1),
-            Inst::AddImmediate(1, 0),
+            Inst::AddImmediate(0, 0, 1),
+            Inst::AddImmediate(1, 1, 0),
             Inst::Xor(3, 1, 1),
             Inst::Xor(4, 1, 0),
             Inst::Xor(5, 0, 1),
             Inst::Xor(6, 0, 0),
-            Inst::AddImmediate(7, 5),
-            Inst::AddImmediate(8, 3),
+            Inst::AddImmediate(7, 7, 5),
+            Inst::AddImmediate(8, 8, 3),
             Inst::Xor(9, 7, 8),
         ]);
         cpu.run();
@@ -378,8 +415,8 @@ mod tests {
     fn test_xor2() {
         let mut cpu = Cpu::default();
         cpu.install_program(vec![
-            Inst::AddImmediate(0, 1),
-            Inst::AddImmediate(1, 0),
+            Inst::AddImmediate(0, 0, 1),
+            Inst::AddImmediate(1, 1, 0),
             Inst::Xor(3, 1, 0),
             Inst::Xor(4, 0, 0),
         ]);

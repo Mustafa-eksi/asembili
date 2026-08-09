@@ -1,2 +1,6 @@
 /target
 *.o
+examples/*
+!examples/*.c
+!examples/*.s
+!examples/*.sh
