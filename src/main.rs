@@ -99,6 +99,32 @@ enum Inst {
     Nop,
 }
 
+impl TryFrom<u32> for Inst {
+    type Error = ();
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if value & 0x3 != 3 {
+            return Err(());
+        }
+        let opcode = (value & 0b1111100) >> 2;
+        match opcode {
+            0b00100 => { // immediate ALU
+                let rd = (value >> 7) & 0b11111;
+                let funct3 = (value >> 12) & 0b111;
+                let rs1 = (value >> 15) & 0b11111;
+                let imm = value >> 20;
+                println!("addi ({funct3}) {rd}, {rs1}, {imm}");
+                return Ok(Inst::AddImmediate(rd as RegType,
+                        rs1 as RegType, imm as ImmType));
+            },
+            _ => {
+                todo!();
+                // return Err(());
+            },
+        }
+    }
+}
+
 type RegisterType = u32;
 #[derive(Debug)]
 struct Cpu {
@@ -231,7 +257,7 @@ impl Cpu {
         }
     }
 
-    fn install_program(&mut self, program: Vec<Inst>) {
+    fn set_instructions(&mut self, program: Vec<Inst>) {
         for (pc, inst) in program.into_iter().enumerate() {
             self.program_memory[pc] = inst;
         }
@@ -256,17 +282,30 @@ fn main() -> error::Result<()> {
     let path = Path::new(args[1].as_str());
     let buffer = fs::read(path)?;
     let elf = Elf::parse(&buffer)?;
+    let mut text_off: usize = 0;
+    let mut text_size: usize = 0;
+    // let mut data_off: usize = 0;
+    // let mut data_size: usize = 0;
     for section in elf.section_headers {
         let name = elf.shdr_strtab.get_at(section.sh_name).unwrap();
         println!("{}", name);
         if name == ".text" {
-            let offset = section.sh_offset as usize;
-            println!("{:?}", &buffer[offset..offset+4]);
-            println!("{:x?}", u32::from_le_bytes(buffer[offset..offset+4].try_into().unwrap()));
+            text_off = section.sh_offset as usize;
+            text_size = section.sh_size as usize;
             // Correct!!
         }
         println!("--");
     }
+    let mut cursor = text_off;
+    let instructions: Vec<u32> = buffer[text_off..text_off+text_size]
+        .to_vec()
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    // let mut cpu = Cpu::default();
+    println!("{:08x?}", instructions[0]);
+    let addi: Inst = Inst::try_from(instructions[0]).unwrap();
+    println!("{addi:?}");
     Ok(())
 }
 
@@ -277,7 +316,7 @@ mod tests {
     #[test]
     fn test_fibonacci() {
         let mut cpu: Cpu = Cpu::default();
-        cpu.install_program(vec![
+        cpu.set_instructions(vec![
             Inst::AddImmediate(0, 0, 0),       // a
             Inst::AddImmediate(1, 1, 1),       // b
             Inst::AddImmediate(4, 4, 15),      // limit
@@ -294,7 +333,7 @@ mod tests {
     #[test]
     fn test_memory() {
         let mut cpu: Cpu = Cpu::default();
-        cpu.install_program(vec![
+        cpu.set_instructions(vec![
             Inst::AddImmediate(0, 0, 69), // val
             Inst::AddImmediate(1, 1, 100), // addr
             Inst::StoreWord(0, 0, 1),
@@ -307,7 +346,7 @@ mod tests {
     #[test]
     fn test_rule110() {
         let mut cpu: Cpu = Cpu::default();
-        cpu.install_program(vec![
+        cpu.set_instructions(vec![
             Inst::AddImmediate(2, 2, 1),       // First 1
             Inst::AddImmediate(3, 3, 0),       // Addr
             Inst::StoreWord(2, 0, 3),       // store
@@ -348,7 +387,7 @@ mod tests {
     #[test]
     fn test_and() {
         let mut cpu = Cpu::default();
-        cpu.install_program(vec![
+        cpu.set_instructions(vec![
             Inst::AddImmediate(0, 0, 1),
             Inst::AddImmediate(1, 1, 0),
             Inst::And(3, 1, 1),
@@ -370,7 +409,7 @@ mod tests {
     #[test]
     fn test_or() {
         let mut cpu = Cpu::default();
-        cpu.install_program(vec![
+        cpu.set_instructions(vec![
             Inst::AddImmediate(0, 0, 1),
             Inst::AddImmediate(1, 1, 0),
             Inst::Or(3, 1, 1),
@@ -392,7 +431,7 @@ mod tests {
     #[test]
     fn test_xor() {
         let mut cpu = Cpu::default();
-        cpu.install_program(vec![
+        cpu.set_instructions(vec![
             Inst::AddImmediate(0, 0, 1),
             Inst::AddImmediate(1, 1, 0),
             Inst::Xor(3, 1, 1),
@@ -414,7 +453,7 @@ mod tests {
     #[test]
     fn test_xor2() {
         let mut cpu = Cpu::default();
-        cpu.install_program(vec![
+        cpu.set_instructions(vec![
             Inst::AddImmediate(0, 0, 1),
             Inst::AddImmediate(1, 1, 0),
             Inst::Xor(3, 1, 0),
