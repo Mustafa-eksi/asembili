@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 goblin = "0.10.7"
+syscalls = { version = "0.8.1", features = ["riscv32"] }

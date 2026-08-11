@@ -9,11 +9,14 @@ use std::fs;
 use goblin::error;
 use goblin::elf::Elf;
 
+use syscalls::riscv32::Sysno;
+
 // 64 KB is enough for everyone
 const HEAP_SIZE: usize = 64e3 as usize;
 const PROGRAM_SIZE: usize = 1024;
 const REGISTER_COUNT: usize = 32;
 
+#[repr(usize)]
 enum Registers {
     Zero            = 0,
     ReturnAddress   = 1,
@@ -51,9 +54,9 @@ enum Registers {
 
 // https://en.wikipedia.org/wiki/RISC-V_instruction_listings
 // reg   = 1
-// imm   = 1 i8
+// imm   = 1 i32
 type RegType = u8;
-type ImmType = i8;
+type ImmType = i32;
 #[derive(Debug, Copy, Clone, Default, PartialEq)]
 enum Inst {
 
@@ -70,6 +73,7 @@ enum Inst {
     Move(RegType, RegType),                             // reg (out), reg (in)
 
     // Arithmetic
+    AddUpperImmediateToPc(RegType, ImmType),            // reg (out), imm
     AddImmediate(RegType, RegType, ImmType),            // reg (out), reg (in), imm
     Add(RegType, RegType, RegType),                     // reg (out), reg (in), reg (in)
     Subtract(RegType, RegType, RegType),                // reg (out), reg (in), reg (in)
@@ -94,6 +98,7 @@ enum Inst {
     BranchGreaterThan(RegType, RegType, ImmType),       // reg, reg, imm
     BranchLessEq(RegType, RegType, ImmType),            // reg, reg, imm
     BranchGreaterEq(RegType, RegType, ImmType),         // reg, reg, imm
+    Ecall,
 
     // Misc
     Nop,
@@ -106,21 +111,36 @@ impl TryFrom<u32> for Inst {
         if value & 0x3 != 3 {
             return Err(());
         }
-        let opcode = (value & 0b1111100) >> 2;
-        match opcode {
-            0b00100 => { // immediate ALU
-                let rd = (value >> 7) & 0b11111;
-                let funct3 = (value >> 12) & 0b111;
-                let rs1 = (value >> 15) & 0b11111;
-                let imm = value >> 20;
-                println!("addi ({funct3}) {rd}, {rs1}, {imm}");
-                return Ok(Inst::AddImmediate(rd as RegType,
-                        rs1 as RegType, imm as ImmType));
-            },
-            _ => {
-                todo!();
-                // return Err(());
-            },
+
+        let opcode = value & 0x7f;
+        let rd = ((value >> 7) & 0x1f) as RegType;
+        let funct3 = (value >> 12) & 0x7;
+        let rs1 = ((value >> 15) & 0x1f) as RegType;
+        let rs2 = ((value >> 20) & 0x1f) as RegType;
+        let funct7 = value >> 25;
+        let u_imm = ((value as i32) >> 12) << 12;
+        let i_imm = (value as i32) >> 20;
+        let s_imm = (((value >> 7) & 0x1f) | ((value >> 25) << 5)) as i32;
+        let s_imm = (s_imm << 20) >> 20;
+        let b_imm = (((value >> 8) & 0x0f) << 1)
+            | (((value >> 25) & 0x3f) << 5)
+            | (((value >> 7) & 0x01) << 11)
+            | (((value >> 31) & 0x01) << 12);
+        let b_imm = ((b_imm as i32) << 19) >> 19;
+
+        match (opcode, funct3, funct7) {
+            (0x17, _, _) => Ok(Inst::AddUpperImmediateToPc(rd, u_imm)),
+            (0x03, 0b010, _) => Ok(Inst::LoadWord(rd, i_imm, rs1)),
+            (0x23, 0b010, _) => Ok(Inst::StoreWord(rs2, s_imm, rs1)),
+            (0x13, 0b000, _) => Ok(Inst::AddImmediate(rd, rs1, i_imm)),
+            (0x13, 0b100, _) => Ok(Inst::XorImm(rd, rs1, i_imm)),
+            (0x33, 0b000, 0b0000000) => Ok(Inst::Add(rd, rs1, rs2)),
+            (0x33, 0b100, 0b0000000) => Ok(Inst::Xor(rd, rs1, rs2)),
+            (0x33, 0b110, 0b0000000) => Ok(Inst::Or(rd, rs1, rs2)),
+            (0x33, 0b111, 0b0000000) => Ok(Inst::And(rd, rs1, rs2)),
+            (0x63, 0b100, _) => Ok(Inst::BranchLessThan(rs1, rs2, b_imm)),
+            (0x73, _, _) => Ok(Inst::Ecall),
+            _ => Err(()),
         }
     }
 }
@@ -131,11 +151,6 @@ struct Cpu {
     program_memory: [Inst; PROGRAM_SIZE],
     tick: RegisterType, // tick counter
     pc: usize, // program counter
-    ra: RegisterType, // return address
-    sp: RegisterType, // stack pointer
-    gp: RegisterType, // global pointer
-    // Skipping tp (thread pointer)
-    fp: RegisterType, // frame pointer
     x: [RegisterType; REGISTER_COUNT], // general use registers
                     // TODO: introduce saved and temporary registers.
     heap: Vec<RegisterType>,
@@ -143,20 +158,25 @@ struct Cpu {
 
 impl Default for Cpu {
     fn default() -> Self {
-        Cpu {
+        let mut c = Cpu {
             program_memory: [Inst::Exit; PROGRAM_SIZE],
-            tick: 0, pc: 0, ra: 0, sp: 0, gp: 0, fp: 0,
+            tick: 0, pc: 0,
             x: [0; REGISTER_COUNT],
             heap: vec![0; HEAP_SIZE],
-        }
+        };
+        c.x[2] = HEAP_SIZE as RegisterType;
+        c
     }
 }
 
 impl Cpu {
     fn run_inst(&mut self) {
         match self.program_memory[self.pc] {
+            Inst::AddUpperImmediateToPc(reg, imm) => {
+                self.x[reg as usize] = (self.pc as RegisterType * 4).wrapping_add(imm as RegisterType);
+            },
             Inst::AddImmediate(reg1, reg2, imm) => {
-                self.x[reg1 as usize] = self.x[reg2 as usize] + imm as RegisterType;
+                self.x[reg1 as usize] = (self.x[reg2 as usize] as i64 + imm as i64) as RegisterType;
             },
             Inst::Add(reg1, reg2, reg3) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize] + self.x[reg3 as usize];
@@ -201,6 +221,14 @@ impl Cpu {
             },
             Inst::Or(reg1, reg2, reg3) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize] | self.x[reg3 as usize];
+            },
+            Inst::Ecall => {
+                let syscall_no = Sysno::try_from(self.x[Registers::Argument7 as usize]).unwrap();
+                // let x86_no = syscalls::Sysno::try_from(syscall_no);
+                // unsafe {
+                //     syscall!(syscall_no);
+                // }
+                println!("{:?}", syscall_no);
             },
             Inst::Dump => {
                 self.dump();
@@ -249,12 +277,15 @@ impl Cpu {
                 }
             } else if line.trim() == "clear" {
                 print!("{esc}[2J{esc}[1;1H", esc = 27 as char);
+            } else if line.trim() == "run" {
+                break;
             } else if line.trim() == "dump" {
                 self.dump();
             } else if line.trim() == "exit" {
                 return;
             }
         }
+        self.run();
     }
 
     fn set_instructions(&mut self, program: Vec<Inst>) {
@@ -288,24 +319,25 @@ fn main() -> error::Result<()> {
     // let mut data_size: usize = 0;
     for section in elf.section_headers {
         let name = elf.shdr_strtab.get_at(section.sh_name).unwrap();
-        println!("{}", name);
+        // println!("{}", name);
         if name == ".text" {
             text_off = section.sh_offset as usize;
             text_size = section.sh_size as usize;
             // Correct!!
         }
-        println!("--");
+        // println!("--");
     }
-    let mut cursor = text_off;
-    let instructions: Vec<u32> = buffer[text_off..text_off+text_size]
+    let instructions: Vec<Inst> = buffer[text_off..text_off+text_size]
         .to_vec()
         .chunks_exact(4)
         .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .take(10)
+        .map(|inst| Inst::try_from(inst).expect(format!("inst {inst:08x?}").as_str()))
         .collect();
-    // let mut cpu = Cpu::default();
-    println!("{:08x?}", instructions[0]);
-    let addi: Inst = Inst::try_from(instructions[0]).unwrap();
-    println!("{addi:?}");
+    let mut cpu = Cpu::default();
+    cpu.set_instructions(instructions);
+    // println!("{:?}", &cpu.program_memory[0..32]);
+    cpu.run();
     Ok(())
 }
 
@@ -314,15 +346,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decodes_implemented_rv32_instructions() {
+        assert_eq!(
+            Inst::try_from(0x12345097),
+            Ok(Inst::AddUpperImmediateToPc(1, 0x12345000))
+        );
+        assert_eq!(
+            Inst::try_from(0xfffff097),
+            Ok(Inst::AddUpperImmediateToPc(1, -0x1000))
+        );
+        assert_eq!(
+            Inst::try_from(0xfff10093),
+            Ok(Inst::AddImmediate(1, 2, -1))
+        );
+        assert_eq!(Inst::try_from(0xff010113), Ok(Inst::AddImmediate(2, 2, -16)));
+        assert_eq!(Inst::try_from(0x003100b3), Ok(Inst::Add(1, 2, 3)));
+        assert_eq!(Inst::try_from(0x00000073), Ok(Inst::Ecall));
+        assert_eq!(Inst::try_from(0x003140b3), Ok(Inst::Xor(1, 2, 3)));
+        assert_eq!(Inst::try_from(0x003160b3), Ok(Inst::Or(1, 2, 3)));
+        assert_eq!(Inst::try_from(0x003170b3), Ok(Inst::And(1, 2, 3)));
+        assert_eq!(Inst::try_from(0xfff14093), Ok(Inst::XorImm(1, 2, -1)));
+        assert_eq!(Inst::try_from(0xffc12083), Ok(Inst::LoadWord(1, -4, 2)));
+        assert_eq!(Inst::try_from(0xfe312e23), Ok(Inst::StoreWord(3, -4, 2)));
+        assert_eq!(
+            Inst::try_from(0xfe314ce3),
+            Ok(Inst::BranchLessThan(2, 3, -8))
+        );
+    }
+
+    #[test]
+    fn rejects_unimplemented_or_invalid_instructions() {
+        assert_eq!(Inst::try_from(0x40310033), Err(())); // SUB
+        assert_eq!(Inst::try_from(0x00000000), Err(())); // Not a 32-bit instruction
+    }
+
+    #[test]
+    fn test_add_upper_immediate_to_pc() {
+        let mut cpu = Cpu::default();
+        cpu.pc = 2;
+        cpu.program_memory[2] = Inst::AddUpperImmediateToPc(1, 0x12345000);
+        cpu.run_inst();
+        assert_eq!(cpu.x[1], 0x12345008);
+
+        cpu.program_memory[2] = Inst::AddUpperImmediateToPc(1, -0x1000);
+        cpu.run_inst();
+        assert_eq!(cpu.x[1], 0xfffff008);
+    }
+
+    #[test]
     fn test_fibonacci() {
         let mut cpu: Cpu = Cpu::default();
         cpu.set_instructions(vec![
             Inst::AddImmediate(0, 0, 0),       // a
             Inst::AddImmediate(1, 1, 1),       // b
             Inst::AddImmediate(4, 4, 15),      // limit
-            Inst::Add(2, 0, 1),             // c = a + b
+            Inst::Add(12, 0, 1),             // c = a + b
             Inst::Move(0, 1),               // a = b
-            Inst::Move(1, 2),               // b = c
+            Inst::Move(1, 12),               // b = c
             Inst::AddImmediate(3, 3, 1),       // i += 1
             Inst::BranchLessThan(3, 4, -5), // go up 4 if c < b
         ]);
@@ -337,19 +417,19 @@ mod tests {
             Inst::AddImmediate(0, 0, 69), // val
             Inst::AddImmediate(1, 1, 100), // addr
             Inst::StoreWord(0, 0, 1),
-            Inst::LoadWord(2, 0, 1),
+            Inst::LoadWord(12, 0, 1),
         ]);
         cpu.run();
-        assert_eq!(cpu.x[2], 69);
+        assert_eq!(cpu.x[12], 69);
     }
 
     #[test]
     fn test_rule110() {
         let mut cpu: Cpu = Cpu::default();
         cpu.set_instructions(vec![
-            Inst::AddImmediate(2, 2, 1),       // First 1
+            Inst::AddImmediate(12, 12, 1),       // First 1
             Inst::AddImmediate(3, 3, 0),       // Addr
-            Inst::StoreWord(2, 0, 3),       // store
+            Inst::StoreWord(12, 0, 3),       // store
             Inst::AddImmediate(0, 0, 32),      // limit
             Inst::AddImmediate(1, 1, 1),       // start i from 1
 
