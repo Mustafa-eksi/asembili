@@ -9,7 +9,8 @@ use std::fs;
 use goblin::error;
 use goblin::elf::Elf;
 
-use syscalls::riscv32::Sysno;
+use syscalls::riscv32;
+use syscalls::syscall;
 
 // 64 KB is enough for everyone
 const HEAP_SIZE: usize = 64e3 as usize;
@@ -93,6 +94,8 @@ enum Inst {
 
     // Control Flow
     Jump(ImmType),                                      // imm
+    JumpAndLink(RegType, ImmType),                      // reg (out), imm
+    JumpAndLinkReturn(RegType, RegType, ImmType),       // reg (out), reg (in), imm
     BranchEquals(RegType, RegType, ImmType),            // reg, reg, imm
     BranchLessThan(RegType, RegType, ImmType),          // reg, reg, imm
     BranchGreaterThan(RegType, RegType, ImmType),       // reg, reg, imm
@@ -140,6 +143,8 @@ impl TryFrom<u32> for Inst {
             (0x33, 0b111, 0b0000000) => Ok(Inst::And(rd, rs1, rs2)),
             (0x63, 0b100, _) => Ok(Inst::BranchLessThan(rs1, rs2, b_imm)),
             (0x73, _, _) => Ok(Inst::Ecall),
+            (0x67, 0x0, _) => Ok(Inst::JumpAndLinkReturn(rd, rs1, i_imm)),
+            (0x6F, 0x0, _) => Ok(Inst::JumpAndLink(rd, u_imm)),
             _ => Err(()),
         }
     }
@@ -223,12 +228,22 @@ impl Cpu {
                 self.x[reg1 as usize] = self.x[reg2 as usize] | self.x[reg3 as usize];
             },
             Inst::Ecall => {
-                let syscall_no = Sysno::try_from(self.x[Registers::Argument7 as usize]).unwrap();
-                // let x86_no = syscalls::Sysno::try_from(syscall_no);
-                // unsafe {
-                //     syscall!(syscall_no);
-                // }
+                let syscall_no = riscv32::Sysno::try_from(self.x[Registers::Argument7 as usize]).unwrap();
+                let x86_no = syscall_no.name().parse().unwrap();
+                unsafe {
+                    let output = syscall!(x86_no).unwrap();
+                    println!("{:?}", output);
+                }
+
                 println!("{:?}", syscall_no);
+            },
+            Inst::JumpAndLinkReturn(rd, rs1, imm) => {
+                self.x[rd as usize] = (self.pc + 1) as u32;
+                self.pc = (self.x[rs1 as usize] as i64 + imm as i64) as usize;
+            },
+            Inst::JumpAndLink(rd, imm) => {
+                self.x[rd as usize] = (self.pc + 1) as u32;
+                self.pc = (self.pc as i64 + imm as i64) as usize;
             },
             Inst::Dump => {
                 self.dump();
@@ -331,13 +346,12 @@ fn main() -> error::Result<()> {
         .to_vec()
         .chunks_exact(4)
         .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
-        .take(10)
         .map(|inst| Inst::try_from(inst).expect(format!("inst {inst:08x?}").as_str()))
         .collect();
     let mut cpu = Cpu::default();
     cpu.set_instructions(instructions);
     // println!("{:?}", &cpu.program_memory[0..32]);
-    cpu.run();
+    cpu.debug_mode();
     Ok(())
 }
 
