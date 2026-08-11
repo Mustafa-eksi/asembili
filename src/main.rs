@@ -71,6 +71,7 @@ enum Inst {
     LoadWord(RegType, ImmType, RegType),                // reg (out), imm, reg (in addr)
     StoreWord(RegType, ImmType, RegType),               // reg (in), imm, reg (out addr)
     LoadImmediate(RegType, ImmType),                    // reg (out), imm
+    LoadUpperImmediate(RegType, ImmType),               // reg (out), imm
     Move(RegType, RegType),                             // reg (out), reg (in)
 
     // Arithmetic
@@ -97,6 +98,7 @@ enum Inst {
     JumpAndLink(RegType, ImmType),                      // reg (out), imm
     JumpAndLinkReturn(RegType, RegType, ImmType),       // reg (out), reg (in), imm
     BranchEquals(RegType, RegType, ImmType),            // reg, reg, imm
+    BranchNotEquals(RegType, RegType, ImmType),         // reg, reg, imm
     BranchLessThan(RegType, RegType, ImmType),          // reg, reg, imm
     BranchGreaterThan(RegType, RegType, ImmType),       // reg, reg, imm
     BranchLessEq(RegType, RegType, ImmType),            // reg, reg, imm
@@ -130,11 +132,17 @@ impl TryFrom<u32> for Inst {
             | (((value >> 7) & 0x01) << 11)
             | (((value >> 31) & 0x01) << 12);
         let b_imm = ((b_imm as i32) << 19) >> 19;
+        let j_imm = (((value >> 21) & 0x03ff) << 1)
+            | (((value >> 20) & 0x01) << 11)
+            | (((value >> 12) & 0x00ff) << 12)
+            | (((value >> 31) & 0x01) << 20);
+        let j_imm = ((j_imm as i32) << 11) >> 11;
 
         match (opcode, funct3, funct7) {
             (0x17, _, _) => Ok(Inst::AddUpperImmediateToPc(rd, u_imm)),
             (0x03, 0b010, _) => Ok(Inst::LoadWord(rd, i_imm, rs1)),
             (0x23, 0b010, _) => Ok(Inst::StoreWord(rs2, s_imm, rs1)),
+            (0x37, _, _) => Ok(Inst::LoadUpperImmediate(rd, u_imm)),
             (0x13, 0b000, _) => Ok(Inst::AddImmediate(rd, rs1, i_imm)),
             (0x13, 0b100, _) => Ok(Inst::XorImm(rd, rs1, i_imm)),
             (0x33, 0b000, 0b0000000) => Ok(Inst::Add(rd, rs1, rs2)),
@@ -142,9 +150,10 @@ impl TryFrom<u32> for Inst {
             (0x33, 0b110, 0b0000000) => Ok(Inst::Or(rd, rs1, rs2)),
             (0x33, 0b111, 0b0000000) => Ok(Inst::And(rd, rs1, rs2)),
             (0x63, 0b100, _) => Ok(Inst::BranchLessThan(rs1, rs2, b_imm)),
+            (0x63, 0b001, _) => Ok(Inst::BranchNotEquals(rs1, rs2, b_imm)),
             (0x73, _, _) => Ok(Inst::Ecall),
             (0x67, 0x0, _) => Ok(Inst::JumpAndLinkReturn(rd, rs1, i_imm)),
-            (0x6F, 0x0, _) => Ok(Inst::JumpAndLink(rd, u_imm)),
+            (0x6f, _, _) => Ok(Inst::JumpAndLink(rd, j_imm)),
             _ => Err(()),
         }
     }
@@ -191,7 +200,12 @@ impl Cpu {
             },
             Inst::BranchLessThan(reg1, reg2, imm) => {
                 if self.x[reg1 as usize] < self.x[reg2 as usize] {
-                    self.pc = (self.pc as isize + imm as isize) as usize;
+                    self.pc = (self.pc as isize + (imm/4) as isize) as usize;
+                }
+            },
+            Inst::BranchNotEquals(reg1, reg2, imm) => {
+                if self.x[reg1 as usize] != self.x[reg2 as usize] {
+                    self.pc = (self.pc as isize + (imm/4) as isize) as usize;
                 }
             },
             Inst::Print(reg) => {
@@ -206,6 +220,9 @@ impl Cpu {
                 let addr = self.x[addr_reg as usize];
                 // println!("Load from {}, load to {}, offset {}, loaded value {}", addr, reg, offset, self.heap[(addr as i64 + offset as i64) as usize]);
                 self.x[reg as usize] = self.heap[(addr as i64 + offset as i64) as usize];
+            },
+            Inst::LoadUpperImmediate(reg, imm) => {
+                self.x[reg as usize] = (imm<<12) as u32;
             },
             Inst::Xor(reg1, reg2, reg3) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize] ^ self.x[reg3 as usize];
@@ -230,8 +247,17 @@ impl Cpu {
             Inst::Ecall => {
                 let syscall_no = riscv32::Sysno::try_from(self.x[Registers::Argument7 as usize]).unwrap();
                 let x86_no = syscall_no.name().parse().unwrap();
+                // self.dump();
                 unsafe {
-                    let output = syscall!(x86_no).unwrap();
+                    let output = syscall!(
+                        x86_no,
+                        self.x[Registers::Argument0 as usize],
+                        self.x[Registers::Argument1 as usize],
+                        self.x[Registers::Argument2 as usize],
+                        self.x[Registers::Argument3 as usize],
+                        self.x[Registers::Argument4 as usize],
+                        self.x[Registers::Argument5 as usize]
+                        ).unwrap();
                     println!("{:?}", output);
                 }
 
@@ -239,11 +265,12 @@ impl Cpu {
             },
             Inst::JumpAndLinkReturn(rd, rs1, imm) => {
                 self.x[rd as usize] = (self.pc + 1) as u32;
-                self.pc = (self.x[rs1 as usize] as i64 + imm as i64) as usize;
+                self.pc = ((self.x[rs1 as usize] as i64 + imm as i64)/4) as usize;
+                // self.dump();
             },
             Inst::JumpAndLink(rd, imm) => {
                 self.x[rd as usize] = (self.pc + 1) as u32;
-                self.pc = (self.pc as i64 + imm as i64) as usize;
+                self.pc = ((self.pc as i64 + imm as i64)/4) as usize;
             },
             Inst::Dump => {
                 self.dump();
@@ -256,6 +283,7 @@ impl Cpu {
 
     fn step(&mut self) {
         self.tick += 1;
+        self.x[0] = 0; // FIXME: This is just a hack needs further inspection
         self.run_inst();
         self.pc += 1;
     }
@@ -361,6 +389,12 @@ mod tests {
 
     #[test]
     fn decodes_implemented_rv32_instructions() {
+        assert_eq!(Inst::try_from(0x008000ef), Ok(Inst::JumpAndLink(1, 8)));
+        assert_eq!(Inst::try_from(0xffdff0ef), Ok(Inst::JumpAndLink(1, -4)));
+        assert_eq!(
+            Inst::try_from(0xffc100e7),
+            Ok(Inst::JumpAndLinkReturn(1, 2, -4))
+        );
         assert_eq!(
             Inst::try_from(0x12345097),
             Ok(Inst::AddUpperImmediateToPc(1, 0x12345000))
