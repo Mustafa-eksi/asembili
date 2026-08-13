@@ -131,7 +131,7 @@ impl TryFrom<u32> for Inst {
             | (((value >> 25) & 0x3f) << 5)
             | (((value >> 7) & 0x01) << 11)
             | (((value >> 31) & 0x01) << 12);
-        let b_imm = ((b_imm as i32) << 19) >> 19;
+        let b_imm = ((b_imm << 19) as i32) >> 19;
         let j_imm = (((value >> 21) & 0x03ff) << 1)
             | (((value >> 20) & 0x01) << 11)
             | (((value >> 12) & 0x00ff) << 12)
@@ -205,7 +205,7 @@ impl Cpu {
             },
             Inst::BranchNotEquals(reg1, reg2, imm) => {
                 if self.x[reg1 as usize] != self.x[reg2 as usize] {
-                    self.pc = (self.pc as isize + (imm/4) as isize) as usize;
+                    self.pc = (self.pc as isize + (imm/4) as isize - 1) as usize;
                 }
             },
             Inst::Print(reg) => {
@@ -232,7 +232,7 @@ impl Cpu {
             },
             Inst::BranchLessEq(reg1, reg2, imm) => {
                 if self.x[reg1 as usize] <= self.x[reg2 as usize] {
-                    self.pc = (self.pc as isize + imm as isize) as usize;
+                    self.pc = (self.pc as isize + (imm/4) as isize) as usize;
                 }
             },
             Inst::Not(reg1, reg2) => {
@@ -411,6 +411,7 @@ mod tests {
         assert_eq!(Inst::try_from(0x003100b3), Ok(Inst::Add(1, 2, 3)));
         assert_eq!(Inst::try_from(0x00000073), Ok(Inst::Ecall));
         assert_eq!(Inst::try_from(0x003140b3), Ok(Inst::Xor(1, 2, 3)));
+        assert_eq!(Inst::try_from(0xfe0696e3), Ok(Inst::BranchNotEquals(13, 0, -20)));
         assert_eq!(Inst::try_from(0x003160b3), Ok(Inst::Or(1, 2, 3)));
         assert_eq!(Inst::try_from(0x003170b3), Ok(Inst::And(1, 2, 3)));
         assert_eq!(Inst::try_from(0xfff14093), Ok(Inst::XorImm(1, 2, -1)));
@@ -445,14 +446,14 @@ mod tests {
     fn test_fibonacci() {
         let mut cpu: Cpu = Cpu::default();
         cpu.set_instructions(vec![
-            Inst::AddImmediate(0, 0, 0),       // a
+            Inst::AddImmediate(10, 10, 0),       // a
             Inst::AddImmediate(1, 1, 1),       // b
             Inst::AddImmediate(4, 4, 15),      // limit
-            Inst::Add(12, 0, 1),             // c = a + b
-            Inst::Move(0, 1),               // a = b
+            Inst::Add(12, 10, 1),             // c = a + b
+            Inst::Move(10, 1),               // a = b
             Inst::Move(1, 12),               // b = c
             Inst::AddImmediate(3, 3, 1),       // i += 1
-            Inst::BranchLessThan(3, 4, -5), // go up 4 if c < b
+            Inst::BranchLessThan(3, 4, -5*4), // go up 4 if c < b
         ]);
         cpu.run();
         assert_eq!(cpu.x[1], 987);
@@ -462,9 +463,9 @@ mod tests {
     fn test_memory() {
         let mut cpu: Cpu = Cpu::default();
         cpu.set_instructions(vec![
-            Inst::AddImmediate(0, 0, 69), // val
+            Inst::AddImmediate(10, 10, 69), // val
             Inst::AddImmediate(1, 1, 100), // addr
-            Inst::StoreWord(0, 0, 1),
+            Inst::StoreWord(10, 0, 1),
             Inst::LoadWord(12, 0, 1),
         ]);
         cpu.run();
@@ -475,11 +476,11 @@ mod tests {
     fn test_rule110() {
         let mut cpu: Cpu = Cpu::default();
         cpu.set_instructions(vec![
-            Inst::AddImmediate(12, 12, 1),       // First 1
-            Inst::AddImmediate(3, 3, 0),       // Addr
+            Inst::AddImmediate(12, 0, 1),       // First 1
+            Inst::AddImmediate(3, 0, 0),       // Addr
             Inst::StoreWord(12, 0, 3),       // store
-            Inst::AddImmediate(0, 0, 32),      // limit
-            Inst::AddImmediate(1, 1, 1),       // start i from 1
+            Inst::AddImmediate(15, 0, 32),      // limit
+            Inst::AddImmediate(1, 0, 1),       // start i from 1
 
             // Outer Loop Start
             Inst::Xor(4, 4, 4),             // set j = 0
@@ -502,10 +503,10 @@ mod tests {
                 Inst::Move(5, 6),
                 Inst::Move(6, 7),
                 Inst::AddImmediate(4, 4, 1),       // j += 1
-                Inst::BranchLessEq(4, 1, -12), // go up if j < i (size)
+                Inst::BranchLessEq(4, 1, -12*4), // go up if j < i (size)
 
             Inst::AddImmediate(1, 1, 1),       // i += 1
-            Inst::BranchLessThan(1, 0, -19), // go up if i < limit
+            Inst::BranchLessThan(1, 15, -19*4), // go up if i < limit
         ]);
         cpu.run();
 
@@ -516,12 +517,12 @@ mod tests {
     fn test_and() {
         let mut cpu = Cpu::default();
         cpu.set_instructions(vec![
-            Inst::AddImmediate(0, 0, 1),
+            Inst::AddImmediate(10, 10, 1),
             Inst::AddImmediate(1, 1, 0),
             Inst::And(3, 1, 1),
-            Inst::And(4, 1, 0),
-            Inst::And(5, 0, 1),
-            Inst::And(6, 0, 0),
+            Inst::And(4, 1, 10),
+            Inst::And(5, 10, 1),
+            Inst::And(6, 10, 10),
             Inst::AddImmediate(7, 7, 5),
             Inst::AddImmediate(8, 8, 2),
             Inst::And(9, 7, 8),
@@ -538,12 +539,12 @@ mod tests {
     fn test_or() {
         let mut cpu = Cpu::default();
         cpu.set_instructions(vec![
-            Inst::AddImmediate(0, 0, 1),
+            Inst::AddImmediate(10, 0, 1),
             Inst::AddImmediate(1, 1, 0),
             Inst::Or(3, 1, 1),
-            Inst::Or(4, 1, 0),
-            Inst::Or(5, 0, 1),
-            Inst::Or(6, 0, 0),
+            Inst::Or(4, 1, 10),
+            Inst::Or(5, 10, 1),
+            Inst::Or(6, 10, 10),
             Inst::AddImmediate(7, 7, 5),
             Inst::AddImmediate(8, 8, 2),
             Inst::Or(9, 7, 8),
@@ -560,12 +561,12 @@ mod tests {
     fn test_xor() {
         let mut cpu = Cpu::default();
         cpu.set_instructions(vec![
-            Inst::AddImmediate(0, 0, 1),
+            Inst::AddImmediate(10, 10, 1),
             Inst::AddImmediate(1, 1, 0),
             Inst::Xor(3, 1, 1),
-            Inst::Xor(4, 1, 0),
-            Inst::Xor(5, 0, 1),
-            Inst::Xor(6, 0, 0),
+            Inst::Xor(4, 1, 10),
+            Inst::Xor(5, 10, 1),
+            Inst::Xor(6, 10, 10),
             Inst::AddImmediate(7, 7, 5),
             Inst::AddImmediate(8, 8, 3),
             Inst::Xor(9, 7, 8),
@@ -582,10 +583,10 @@ mod tests {
     fn test_xor2() {
         let mut cpu = Cpu::default();
         cpu.set_instructions(vec![
-            Inst::AddImmediate(0, 0, 1),
+            Inst::AddImmediate(10, 10, 1),
             Inst::AddImmediate(1, 1, 0),
-            Inst::Xor(3, 1, 0),
-            Inst::Xor(4, 0, 0),
+            Inst::Xor(3, 1, 10),
+            Inst::Xor(4, 10, 10),
         ]);
         cpu.run();
         assert_eq!(cpu.x[3], 1);
