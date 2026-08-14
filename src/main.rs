@@ -5,6 +5,9 @@ use std::io::Write;
 use std::path::Path;
 use std::env;
 use std::fs;
+use std::ptr;
+use std::cmp::min;
+// use std::slice;
 
 use goblin::error;
 use goblin::elf::Elf;
@@ -159,24 +162,37 @@ impl TryFrom<u32> for Inst {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+struct VirtualMemory {
+    raw_pointer: *mut u8,
+    size: usize,
+    offset: usize,
+    flags: u32,
+}
+
 type RegisterType = u32;
 #[derive(Debug)]
 struct Cpu {
     program_memory: [Inst; PROGRAM_SIZE],
     tick: RegisterType, // tick counter
     pc: usize, // program counter
+    program_start: *mut u8, // program address
+    entry_address: *mut u8,
     x: [RegisterType; REGISTER_COUNT], // general use registers
                     // TODO: introduce saved and temporary registers.
     heap: Vec<RegisterType>,
+    virtmems: Vec<VirtualMemory>,
 }
 
 impl Default for Cpu {
     fn default() -> Self {
         let mut c = Cpu {
             program_memory: [Inst::Exit; PROGRAM_SIZE],
-            tick: 0, pc: 0,
+            tick: 0, pc: 0, program_start: 0 as *mut u8,
+            entry_address: 0 as *mut u8,
             x: [0; REGISTER_COUNT],
             heap: vec![0; HEAP_SIZE],
+            virtmems: Vec::new()
         };
         c.x[2] = HEAP_SIZE as RegisterType;
         c
@@ -184,10 +200,13 @@ impl Default for Cpu {
 }
 
 impl Cpu {
-    fn run_inst(&mut self) {
+    // true = increase pc
+    // false = don't change pc (means we made a jump)
+    fn run_inst(&mut self) -> bool {
         match self.program_memory[self.pc] {
             Inst::AddUpperImmediateToPc(reg, imm) => {
-                self.x[reg as usize] = (self.pc as RegisterType * 4).wrapping_add(imm as RegisterType);
+                let pc_addr = self.program_start as usize+self.pc*4;
+                self.x[reg as usize] = (pc_addr as RegisterType).wrapping_add(imm as RegisterType);
             },
             Inst::AddImmediate(reg1, reg2, imm) => {
                 self.x[reg1 as usize] = (self.x[reg2 as usize] as i64 + imm as i64) as RegisterType;
@@ -248,8 +267,8 @@ impl Cpu {
                 let syscall_no = riscv32::Sysno::try_from(self.x[Registers::Argument7 as usize]).unwrap();
                 let x86_no = syscall_no.name().parse().unwrap();
                 // self.dump();
-                unsafe {
-                    let output = syscall!(
+                let _output = unsafe {
+                    syscall!(
                         x86_no,
                         self.x[Registers::Argument0 as usize],
                         self.x[Registers::Argument1 as usize],
@@ -257,20 +276,22 @@ impl Cpu {
                         self.x[Registers::Argument3 as usize],
                         self.x[Registers::Argument4 as usize],
                         self.x[Registers::Argument5 as usize]
-                        ).unwrap();
-                    println!("{:?}", output);
-                }
+                        )
+                }.unwrap();
 
-                println!("{:?}", syscall_no);
+                // println!("{:?}", syscall_no);
             },
             Inst::JumpAndLinkReturn(rd, rs1, imm) => {
+                // TODO: This might be disastrous
                 self.x[rd as usize] = (self.pc + 1) as u32;
-                self.pc = ((self.x[rs1 as usize] as i64 + imm as i64)/4) as usize;
+                self.pc = (self.x[rs1 as usize] as i64 + (imm as i64)/4) as usize;
+                return false;
                 // self.dump();
             },
             Inst::JumpAndLink(rd, imm) => {
                 self.x[rd as usize] = (self.pc + 1) as u32;
-                self.pc = ((self.pc as i64 + imm as i64)/4) as usize;
+                self.pc = (self.pc as i64 + (imm as i64)/4) as usize;
+                return false;
             },
             Inst::Dump => {
                 self.dump();
@@ -278,14 +299,16 @@ impl Cpu {
             _ => {
                 todo!("{:?}", self.program_memory[self.pc]);
             }
-        }
+        };
+        true
     }
 
     fn step(&mut self) {
         self.tick += 1;
         self.x[0] = 0; // FIXME: This is just a hack needs further inspection
-        self.run_inst();
-        self.pc += 1;
+        if self.run_inst() {
+            self.pc += 1;
+        }
     }
 
     fn run(&mut self) {
@@ -318,6 +341,9 @@ impl Cpu {
                     }
                     println!("{}: {:?}", i, inst);
                 }
+            } else if line.trim() == "pc" {
+                let pc_addr = self.program_start as usize+self.pc*4;
+                println!("pc: {}, program_address: {pc_addr:08x?}", self.pc);
             } else if line.trim() == "clear" {
                 print!("{esc}[2J{esc}[1;1H", esc = 27 as char);
             } else if line.trim() == "run" {
@@ -337,6 +363,70 @@ impl Cpu {
         }
     }
 
+    fn load_elf(&mut self, buffer: &Vec<u8>) {
+        let elf = Elf::parse(&buffer).unwrap();
+        let mut text_off: usize = 0;
+        let mut text_size: usize = 0;
+        for section in elf.section_headers {
+            let name = elf.shdr_strtab.get_at(section.sh_name).unwrap();
+            if name == ".text" {
+                text_off = section.sh_offset as usize;
+                text_size = section.sh_size as usize;
+            }
+        }
+        for header in elf.program_headers {
+            if header.p_type != 1 || header.p_memsz == 0 {
+                continue;
+            }
+            // println!("{:?}", header);
+            let mut virtmem = VirtualMemory::default();
+            virtmem.raw_pointer = header.p_vaddr as *mut u8;
+            virtmem.size = header.p_memsz as usize;
+            virtmem.flags = header.p_flags;
+            virtmem.offset = header.p_offset as usize;
+            self.virtmems.push(virtmem);
+        }
+
+        for vmem in self.virtmems.clone() {
+            let aligned = ((vmem.raw_pointer as u32)/4096)*4096;
+            let aligned_diff = vmem.raw_pointer as u32-aligned;
+            let output = unsafe {
+                 syscall!(syscalls::Sysno::mmap,
+                    aligned, vmem.size as u32+aligned_diff, 0x7,
+                    0x20 | 0x02 | 0x100000,
+                    usize::MAX,
+                    0usize
+                    )
+            };
+            match output {
+                Ok(pointer) => {
+                    if pointer != vmem.raw_pointer as usize {
+                        // println!("Virtual memory allocation aligned {pointer:08x?}");
+                    }
+                },
+                Err(err) => {
+                    eprintln!("virtmem pointer: {:?}, virtmem size: {:?}",
+                        vmem.raw_pointer, vmem.size);
+                    panic!("Virtual memory allocation error {err}");
+                },
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(buffer.as_ptr().add(vmem.offset), vmem.raw_pointer,
+                min(vmem.size, buffer.len()));
+            }
+        }
+
+        self.program_start = (text_off+0x10000) as *mut u8;
+        self.entry_address = elf.entry as *mut u8;
+        self.pc = ((self.entry_address as usize)-self.program_start as usize)/4;
+        self.set_instructions(buffer[text_off..text_off+text_size]
+            .to_vec()
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+            .map(|inst| Inst::try_from(inst).expect(format!("inst {inst:08x?}").as_str()))
+            .collect());
+    }
+
     fn dump(&self) {
         println!("--- Emulation Dump");
         println!("Stepping, pc = {}, inst = {:?}, tick = {}", self.pc,
@@ -354,32 +444,15 @@ fn main() -> error::Result<()> {
         panic!("Insufficent arguments");
     }
     let path = Path::new(args[1].as_str());
-    let buffer = fs::read(path)?;
-    let elf = Elf::parse(&buffer)?;
-    let mut text_off: usize = 0;
-    let mut text_size: usize = 0;
-    // let mut data_off: usize = 0;
-    // let mut data_size: usize = 0;
-    for section in elf.section_headers {
-        let name = elf.shdr_strtab.get_at(section.sh_name).unwrap();
-        // println!("{}", name);
-        if name == ".text" {
-            text_off = section.sh_offset as usize;
-            text_size = section.sh_size as usize;
-            // Correct!!
-        }
-        // println!("--");
-    }
-    let instructions: Vec<Inst> = buffer[text_off..text_off+text_size]
-        .to_vec()
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
-        .map(|inst| Inst::try_from(inst).expect(format!("inst {inst:08x?}").as_str()))
-        .collect();
+    let buffer: Vec<u8> = fs::read(path)?;
     let mut cpu = Cpu::default();
-    cpu.set_instructions(instructions);
+    cpu.load_elf(&buffer);
     // println!("{:?}", &cpu.program_memory[0..32]);
-    cpu.debug_mode();
+    if args.into_iter().find(|x| x == "-d").is_some() {
+        cpu.debug_mode();
+    } else {
+        cpu.run();
+    }
     Ok(())
 }
 
@@ -433,13 +506,15 @@ mod tests {
     fn test_add_upper_immediate_to_pc() {
         let mut cpu = Cpu::default();
         cpu.pc = 2;
+        cpu.program_start = 0x10000 as *mut u8;
+        let pc_addr = cpu.program_start as usize+cpu.pc*4;
         cpu.program_memory[2] = Inst::AddUpperImmediateToPc(1, 0x12345000);
         cpu.run_inst();
-        assert_eq!(cpu.x[1], 0x12345008);
+        assert_eq!(cpu.x[1], pc_addr as u32+0x12345000);
 
         cpu.program_memory[2] = Inst::AddUpperImmediateToPc(1, -0x1000);
         cpu.run_inst();
-        assert_eq!(cpu.x[1], 0xfffff008);
+        assert_eq!(cpu.x[1], pc_addr as u32-0x1000);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-void _start() {
+int _start() {
     int n = 20;
     int a = 1, b = 1;
     for (int i = 0; i < n; i++) {
@@ -24,4 +24,5 @@ void _start() {
     :"r"(b)
     :
     );
+    return 0;
 }
