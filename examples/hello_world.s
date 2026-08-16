@@ -2,12 +2,12 @@
 
 .section .text
 
-print:
+hello_world:
     addi sp, sp, -16
     sw ra, 12(sp)
     sw s0, 8(sp)
 
-    li a0, 0
+    li a0, 1
     la a1, hello
     la a2, hello_size
     li a7, 64
@@ -22,7 +22,8 @@ _start:
     li t2, 10
 
 loop:
-    call print
+    mv a1, t2
+    call hello_world
     addi t2, t2, -1
     bnez t2, loop
 

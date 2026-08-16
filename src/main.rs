@@ -157,7 +157,11 @@ impl TryFrom<u32> for Inst {
             (0x73, _, _) => Ok(Inst::Ecall),
             (0x67, 0x0, _) => Ok(Inst::JumpAndLinkReturn(rd, rs1, i_imm)),
             (0x6f, _, _) => Ok(Inst::JumpAndLink(rd, j_imm)),
-            _ => Err(()),
+            _ => {
+                eprintln!("Unknown instruction.");
+                eprintln!("opcode: {opcode:08x?}");
+                return Err(());
+            },
         }
     }
 }
@@ -277,7 +281,10 @@ impl Cpu {
                         self.x[Registers::Argument4 as usize],
                         self.x[Registers::Argument5 as usize]
                         )
-                }.unwrap();
+                }.map_err(|err| {
+                    // self.dump
+                    panic!("{:?}", err);
+                });
 
                 // println!("{:?}", syscall_no);
             },
@@ -297,7 +304,7 @@ impl Cpu {
                 self.dump();
             },
             _ => {
-                todo!("{:?}", self.program_memory[self.pc]);
+                todo!("Couldn't run instruction {:?}", self.program_memory[self.pc]);
             }
         };
         true
@@ -326,7 +333,7 @@ impl Cpu {
             let mut line = String::new();
             io::stdin().read_line(&mut line).unwrap();
             if line.trim() == "reg" {
-                println!("Regs: {:?}", self.x);
+                println!("Regs: {:x?}", self.x);
             } else if line.trim() == "n" {
                 println!("{}: {:?}", self.pc, self.program_memory[self.pc]);
                 self.step();
@@ -348,6 +355,20 @@ impl Cpu {
                 print!("{esc}[2J{esc}[1;1H", esc = 27 as char);
             } else if line.trim() == "run" {
                 break;
+            } else if line.trim() == "virtmem" {
+                for virtmem in self.virtmems.clone() {
+                    println!("{virtmem:?}");
+                    for x in (virtmem.raw_pointer as usize)..(virtmem.raw_pointer as usize+virtmem.size) {
+                        unsafe {
+                            print!("{:02x?} ", *(x as *mut u8));
+                        }
+                        if x % 16 == 0 {
+                            println!();
+                            print!("{x:x?}\t");
+                        }
+                    }
+                    println!();
+                }
             } else if line.trim() == "dump" {
                 self.dump();
             } else if line.trim() == "exit" {
@@ -378,7 +399,6 @@ impl Cpu {
             if header.p_type != 1 || header.p_memsz == 0 {
                 continue;
             }
-            // println!("{:?}", header);
             let mut virtmem = VirtualMemory::default();
             virtmem.raw_pointer = header.p_vaddr as *mut u8;
             virtmem.size = header.p_memsz as usize;
@@ -423,7 +443,7 @@ impl Cpu {
             .to_vec()
             .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
-            .map(|inst| Inst::try_from(inst).expect(format!("inst {inst:08x?}").as_str()))
+            .map(|inst| Inst::try_from(inst).expect(format!("inst 0x{inst:08x?}").as_str()))
             .collect());
     }
 
