@@ -9,6 +9,7 @@ use syscalls::riscv32;
 use syscalls::syscall;
 
 use crate::inst::*;
+use crate::program::Program;
 
 use crate::virtual_memory::VirtualMemory;
 
@@ -318,10 +319,12 @@ impl Cpu {
         self.program_start = (text_off+0x10000) as *mut u8;
         self.entry_address = elf.entry as *mut u8;
         self.pc = ((self.entry_address as usize)-self.program_start as usize)/4;
-        self.set_instructions(buffer[text_off..text_off+text_size]
+        let program = Program::from(buffer[text_off..text_off+text_size]
             .to_vec()
-            .chunks_exact(4)
-            .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes(chunk.try_into().unwrap()))
+            .collect::<Vec<u16>>());
+        self.set_instructions(program
             .map(|inst| Inst::try_from(inst).expect(format!("inst 0x{inst:08x?}").as_str()))
             .collect());
     }

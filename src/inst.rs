@@ -1,5 +1,4 @@
-
-
+use crate::program::RawInst;
 
 // https://en.wikipedia.org/wiki/RISC-V_instruction_listings
 // reg   = 1
@@ -14,6 +13,7 @@ pub enum Inst {
     Exit, // Ends emulation
     Print(RegType),
     Dump,
+    Compressed,
 
     // Memory
     LoadWord(RegType, ImmType, RegType),                // reg (out), imm, reg (in addr)
@@ -59,17 +59,24 @@ pub enum Inst {
 
 fn decompress(value: u16) -> u32 {
     println!("Compressed instruction: {value:04x?}");
-    0 as u32
+    0x00000073 as u32
+}
+
+impl TryFrom<RawInst> for Inst {
+    type Error = ();
+
+    fn try_from(raw_inst: RawInst) -> Result<Self, Self::Error> {
+        match raw_inst {
+            RawInst::Compressed(c) => {Inst::try_from(decompress(c))},
+            RawInst::Normal(n) => {Inst::try_from(n)}
+        }
+    }
 }
 
 impl TryFrom<u32> for Inst {
     type Error = ();
 
-    fn try_from(mut value: u32) -> Result<Self, Self::Error> {
-        if value & 0x3 != 3 {
-            value = decompress((value<<16) as u16);
-        }
-
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
         let opcode = value & 0x7f;
         let rd = ((value >> 7) & 0x1f) as RegType;
         let funct3 = (value >> 12) & 0x7;

@@ -6,6 +6,7 @@ use std::fs;
 use goblin::error;
 
 mod virtual_memory;
+mod program;
 mod inst;
 mod cpu;
 mod tests;
