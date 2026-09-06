@@ -1,3 +1,4 @@
+#[derive(Debug, Clone)]
 pub struct Program {
     buff: Vec<u16>,
     pos: usize,

@@ -211,4 +211,47 @@ mod tests {
         assert_eq!(cpu.x[3], 1);
         assert_eq!(cpu.x[4], 0);
     }
+
+    // #[test]
+    // fn decodes_riscv32c_compressed_instructions() {
+    //     use crate::program::RawInst;
+    //     use crate::inst::Inst;
+    //     // (encoding, expected) -- encodings taken from the RISC-V "C" spec
+    //     let cases: [(u16, Inst); 26] = [
+    //         (0x1024, Inst::AddImmediate(9, 2, 40)),              // C.ADDI4SPN x9, 40
+    //         (0x5504, Inst::LoadWord(9, 40, 10)),                 // C.LW x9, 40(x10)
+    //         (0xd504, Inst::StoreWord(9, 40, 10)),                // C.SW x9, 40(x10)
+    //         (0x10fd, Inst::AddImmediate(1, 1, -1)),              // C.ADDI x1, -1
+    //         (0x0095, Inst::AddImmediate(1, 1, 5)),               // C.ADDI x1, 5
+    //         (0x0001, Inst::Nop),                                 // C.NOP
+    //         (0x2011, Inst::JumpAndLink(1, 4)),                   // C.JAL 4
+    //         (0x3ff5, Inst::JumpAndLink(1, -4)),                  // C.JAL -4
+    //         (0x50ed, Inst::LoadImmediate(1, -5)),                // C.LI x1, -5
+    //         (0x6085, Inst::LoadUpperImmediate(1, 0x1000)),       // C.LUI x1, 1
+    //         (0x8085, Inst::ShiftRightLogical(9, 9, 1)),          // C.SRLI x9, 1
+    //         (0x8485, Inst::ShiftRightArithmetic(9, 9, 1)),       // C.SRAI x9, 1
+    //         (0x8c89, Inst::Subtract(9, 9, 10)),                  // C.SUB x9, x10
+    //         (0x8ca9, Inst::Xor(9, 9, 10)),                       // C.XOR x9, x10
+    //         (0x8cc9, Inst::Or(9, 9, 10)),                        // C.OR x9, x10
+    //         (0x8ce9, Inst::And(9, 9, 10)),                       // C.AND x9, x10
+    //         (0x2021, Inst::Jump(8)),                             // C.J 8
+    //         (0xc481, Inst::BranchEquals(9, 0, 8)),               // C.BEQZ x9, 8
+    //         (0xfce5, Inst::BranchNotEquals(9, 0, -8)),           // C.BNEZ x9, -8
+    //         (0x008a, Inst::ShiftLeftLogical(1, 1, 2)),           // C.SLLI x1, 2
+    //         (0x50a2, Inst::LoadWord(1, 40, 2)),                  // C.LWSP x1, 40(x2)
+    //         (0x8402, Inst::JumpAndLinkReturn(0, 8, 0)),          // C.JR x8
+    //         (0x831e, Inst::Move(6, 7)),                          // C.MV x6, x7
+    //         (0x9402, Inst::JumpAndLinkReturn(1, 8, 0)),          // C.JALR x8
+    //         (0x931e, Inst::Add(6, 6, 7)),                        // C.ADD x6, x7
+    //         (0xd406, Inst::StoreWord(1, 40, 2)),                 // C.SWSP x1, 40(x2)
+    //     ];
+    //     for (enc, expected) in cases {
+    //         assert_eq!(
+    //             Inst::try_from(RawInst::Compressed(enc)),
+    //             Ok(expected),
+    //             "Mismatch for encoding 0x{enc:04x}"
+    //         );
+    //     }
+    // }
+
 }

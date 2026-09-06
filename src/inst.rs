@@ -57,9 +57,156 @@ pub enum Inst {
     Nop,
 }
 
-fn decompress(value: u16) -> u32 {
-    println!("Compressed instruction: {value:04x?}");
-    0x00000073 as u32
+fn decompress(value: u16) -> Result<Inst, ()> {
+    let opcode = value & 0x3;
+    let funct3 = (value >> 13) & 0x7;
+    let rd = ((value >> 7) & 0x1f) as RegType;
+    let rs1 = rd;
+    let rs2 = ((value >> 2) & 0x1f) as RegType;
+    let rdp = ((value >> 2) & 0x7) as RegType;
+    let rs1p = ((value >> 7) & 0x7) as RegType;
+    let rs2p = ((value >> 2) & 0x7) as RegType;
+    let uimm = ((value >> 12) & 0x1) << 5
+        | ((value >> 11) & 0x1) << 4
+        | ((value >> 10) & 0x1) << 3
+        | ((value >> 6) & 0x1) << 2
+        | ((value >> 5) & 0x1) << 6;
+    let funct2 = (value >> 10) & 0x3;
+    let funct4 = (value >> 12) & 0x1;
+    let j_imm = ((value >> 12) & 0x1) << 11
+        | ((value >> 11) & 0x1) << 4
+        | ((value >> 9) & 0x3) << 8
+        | ((value >> 8) & 0x1) << 10
+        | ((value >> 7) & 0x1) << 6
+        | ((value >> 6) & 0x1) << 7
+        | ((value >> 3) & 0x7) << 1
+        | ((value >> 2) & 0x1) << 5;
+    let j_imm = ((j_imm as i32) << 20) >> 20;
+    let cl_imm = ((value>>5)&0x3) | ((value>>10)&0x7)<<3;
+    let ci_imm = (((value >> 12) & 0x1) << 5 | ((value >> 2) & 0x1f)) as i32;
+    let ci_imm = (ci_imm << 26) >> 26;
+
+    match (opcode, funct3, funct2, funct4, rd, rs2) {
+        // Quadrant 0
+        // FIXME: No check for illegal instruction nzuimm != 0
+        (0, 0b000, _, _, _, _) => Ok(Inst::AddImmediate(8 + rdp, 2, ci_imm as i32)),
+        (0, 0b010, _, _, _, _) => Ok(Inst::LoadWord(8 + rdp, cl_imm as i32, 8 + rs1p)),
+        (0, 0b110, _, _, _, _) => Ok(Inst::StoreWord(8 + rs2p, uimm as i32, 8 + rs1p)),
+        // Quadrant 1
+        (1, 0b000, _, _, 0, _) => Ok(Inst::Nop),
+        (1, 0b000, _, _, rd, _) => Ok(Inst::AddImmediate(rd, rd, ci_imm as i32)),
+        (1, 0b001, _, _, _, _) => Ok(Inst::JumpAndLink(1, j_imm)),
+        (1, 0b010, _, _, _, _) => {
+            Ok(Inst::LoadImmediate(rd, ci_imm))
+        }
+        (1, 0b011, _, _, 2, _) => {
+            let imm = ((value >> 12) & 0x1) << 9
+                | ((value >> 6) & 0x1) << 4
+                | ((value >> 5) & 0x1) << 6
+                | ((value >> 3) & 0x3) << 7
+                | ((value >> 2) & 0x1) << 5;
+            let imm = ((imm as i32) << 22) >> 22;
+            Ok(Inst::AddImmediate(2, 2, imm))
+        },
+        (1, 0b011, _, _, rd, _) => {
+            let imm = (((value >> 12) & 0x1) << 5 | ((value >> 2) & 0x1f)) as i32;
+            let imm = (imm << 26) >> 26;
+            Ok(Inst::LoadUpperImmediate(rd, imm << 12))
+        }
+        (1, 0b100, f2, _, _, _) => {
+            if f2 == 0b11 {
+                let f2c = (value >> 5) & 0x3;
+                match f2c {
+                    0b00 => Ok(Inst::Subtract(8 + rs1p, 8 + rs1p, 8 + rs2p)),
+                    0b01 => Ok(Inst::Xor(8 + rs1p, 8 + rs1p, 8 + rs2p)),
+                    0b10 => Ok(Inst::Or(8 + rs1p, 8 + rs1p, 8 + rs2p)),
+                    0b11 => Ok(Inst::And(8 + rs1p, 8 + rs1p, 8 + rs2p)),
+                    _ => Err(()),
+                }
+            } else {
+                let shamt = (((value >> 12) & 0x1) << 5 | ((value >> 2) & 0x1f)) as RegType;
+                match f2 {
+                    0b00 => Ok(Inst::ShiftRightLogical(8 + rs1p, 8 + rs1p, shamt)),
+                    0b01 => Ok(Inst::ShiftRightArithmetic(8 + rs1p, 8 + rs1p, shamt)),
+                    _ => Err(()),
+                }
+            }
+        }
+        (1, 0b101, _, _, _, _) => {
+            let j_imm = ((value >> 12) & 0x1) << 11
+                | ((value >> 11) & 0x1) << 4
+                | ((value >> 9) & 0x3) << 8
+                | ((value >> 8) & 0x1) << 10
+                | ((value >> 7) & 0x1) << 6
+                | ((value >> 6) & 0x1) << 7
+                | ((value >> 3) & 0x7) << 1
+                | ((value >> 2) & 0x1) << 5;
+            let j_imm = ((j_imm as i32) << 20) >> 20;
+            Ok(Inst::Jump(j_imm))
+        }
+        (1, 0b110, _, _, _, _) => {
+            let offset = ((value >> 12) & 0x1) << 8
+                | ((value >> 10) & 0x3) << 3
+                | ((value >> 5) & 0x3) << 6
+                | ((value >> 3) & 0x3) << 1
+                | ((value >> 2) & 0x1) << 5;
+            let offset = ((offset as i32) << 23) >> 23;
+            Ok(Inst::BranchEquals(8 + rs1p, 0, offset))
+        }
+        (1, 0b111, _, _, _, _) => {
+            let offset = ((value >> 12) & 0x1) << 8
+                | ((value >> 10) & 0x3) << 3
+                | ((value >> 5) & 0x3) << 6
+                | ((value >> 3) & 0x3) << 1
+                | ((value >> 2) & 0x1) << 5;
+            let offset = ((offset as i32) << 23) >> 23;
+            Ok(Inst::BranchNotEquals(8 + rs1p, 0, offset))
+        }
+        // Quadrant 2
+        (2, 0b000, _, _, _, _) => {
+            let shamt = (((value >> 12) & 0x1) << 5 | ((value >> 2) & 0x1f)) as RegType;
+            Ok(Inst::ShiftLeftLogical(rd, rd, shamt))
+        }
+        (2, 0b010, _, _, _, _) => {
+            let uimm = ((value >> 12) & 0x1) << 5
+                | ((value >> 6) & 0x1) << 4
+                | ((value >> 5) & 0x1) << 3
+                | ((value >> 4) & 0x1) << 2
+                | ((value >> 2) & 0x3) << 6;
+            Ok(Inst::LoadWord(rd, uimm as i32, 2))
+        }
+        (2, 0b100, _, f4, _, _) => {
+            if f4 == 0 {
+                if rs2 == 0 {
+                    Ok(Inst::JumpAndLinkReturn(0, rs1, 0))
+                } else {
+                    Ok(Inst::Move(rd, rs2))
+                }
+            } else {
+                if rs2 == 0 {
+                    if rs1 == 0 {
+                        Ok(Inst::Ecall)
+                    } else {
+                        Ok(Inst::JumpAndLinkReturn(1, rs1, 0))
+                    }
+                } else {
+                    Ok(Inst::Add(rd, rd, rs2))
+                }
+            }
+        }
+        (2, 0b110, _, _, _, _) => {
+            let uimm = ((value >> 12) & 0x1) << 5
+                | ((value >> 11) & 0x1) << 4
+                | ((value >> 10) & 0x1) << 3
+                | ((value >> 9) & 0x1) << 2
+                | ((value >> 7) & 0x3) << 6;
+            Ok(Inst::StoreWord(rs2, uimm as i32, 2))
+        }
+        _ => {
+            eprintln!("Unknown compressed instruction.");
+            Err(())
+        }
+    }
 }
 
 impl TryFrom<RawInst> for Inst {
@@ -67,7 +214,7 @@ impl TryFrom<RawInst> for Inst {
 
     fn try_from(raw_inst: RawInst) -> Result<Self, Self::Error> {
         match raw_inst {
-            RawInst::Compressed(c) => {Inst::try_from(decompress(c))},
+            RawInst::Compressed(c) => {decompress(c)},
             RawInst::Normal(n) => {Inst::try_from(n)}
         }
     }
