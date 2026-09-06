@@ -58,7 +58,7 @@ enum Registers {
 type RegisterType = u32;
 #[derive(Debug)]
 pub struct Cpu {
-    pub program_memory: [Inst; PROGRAM_SIZE],
+    pub program_memory: [(usize, Inst); PROGRAM_SIZE],
     tick: RegisterType, // tick counter
     pub pc: usize, // program counter
     pub program_start: *mut u8, // program address
@@ -72,7 +72,7 @@ pub struct Cpu {
 impl Default for Cpu {
     fn default() -> Self {
         let mut c = Cpu {
-            program_memory: [Inst::Exit; PROGRAM_SIZE],
+            program_memory: [(0, Inst::Exit); PROGRAM_SIZE],
             tick: 0, pc: 0, program_start: 0 as *mut u8,
             entry_address: 0 as *mut u8,
             x: [0; REGISTER_COUNT],
@@ -89,66 +89,68 @@ impl Cpu {
     // false = don't change pc (means we made a jump)
     pub fn run_inst(&mut self) -> bool {
         match self.program_memory[self.pc] {
-            Inst::AddUpperImmediateToPc(reg, imm) => {
-                let pc_addr = self.program_start as usize+self.pc*4;
+            (pos, Inst::AddUpperImmediateToPc(reg, imm)) => {
+                let pc_addr = self.program_start as usize+pos;
                 self.x[reg as usize] = (pc_addr as RegisterType).wrapping_add(imm as RegisterType);
             },
-            Inst::AddImmediate(reg1, reg2, imm) => {
+            (_pos, Inst::AddImmediate(reg1, reg2, imm)) => {
                 self.x[reg1 as usize] = (self.x[reg2 as usize] as i64 + imm as i64) as RegisterType;
             },
-            Inst::Add(reg1, reg2, reg3) => {
+            (_pos, Inst::Add(reg1, reg2, reg3)) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize] + self.x[reg3 as usize];
             },
-            Inst::Move(reg1, reg2) => {
+            (_pos, Inst::Move(reg1, reg2)) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize];
             },
-            Inst::BranchLessThan(reg1, reg2, imm) => {
+            (pos, Inst::BranchLessThan(reg1, reg2, imm)) => {
                 if self.x[reg1 as usize] < self.x[reg2 as usize] {
-                    self.pc = (self.pc as isize + (imm/4) as isize) as usize;
+                    self.jump_to((pos as isize + imm as isize) as isize);
+                    return false;
                 }
             },
-            Inst::BranchNotEquals(reg1, reg2, imm) => {
+            (pos, Inst::BranchNotEquals(reg1, reg2, imm)) => {
                 if self.x[reg1 as usize] != self.x[reg2 as usize] {
-                    self.pc = (self.pc as isize + (imm/4) as isize - 1) as usize;
+                    self.jump_to(pos as isize + imm as isize);
+                    return false;
                 }
             },
-            Inst::Print(reg) => {
+            (_pos, Inst::Print(reg)) => {
                 println!("{}", self.x[reg as usize]);
             },
-            Inst::StoreWord(input, offset, addr_reg) => {
+            (_pos, Inst::StoreWord(input, offset, addr_reg)) => {
                 // TODO: expand array when needed
                 let addr = self.x[addr_reg as usize];
                 self.heap[(addr as i64 + offset as i64) as usize] = self.x[input as usize];
             },
-            Inst::LoadWord(reg, offset, addr_reg) => {
+            (_pos, Inst::LoadWord(reg, offset, addr_reg)) => {
                 let addr = self.x[addr_reg as usize];
                 // println!("Load from {}, load to {}, offset {}, loaded value {}", addr, reg, offset, self.heap[(addr as i64 + offset as i64) as usize]);
                 self.x[reg as usize] = self.heap[(addr as i64 + offset as i64) as usize];
             },
-            Inst::LoadUpperImmediate(reg, imm) => {
+            (_pos, Inst::LoadUpperImmediate(reg, imm)) => {
                 self.x[reg as usize] = (imm<<12) as u32;
             },
-            Inst::Xor(reg1, reg2, reg3) => {
+            (_pos, Inst::Xor(reg1, reg2, reg3)) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize] ^ self.x[reg3 as usize];
             },
-            Inst::XorImm(reg1, reg2, imm) => {
+            (_pos, Inst::XorImm(reg1, reg2, imm)) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize] ^ imm as RegisterType;
             },
-            Inst::BranchLessEq(reg1, reg2, imm) => {
+            (pos, Inst::BranchLessEq(reg1, reg2, imm)) => {
                 if self.x[reg1 as usize] <= self.x[reg2 as usize] {
-                    self.pc = (self.pc as isize + (imm/4) as isize) as usize;
+                    self.jump_to((pos as isize + imm as isize) as isize);
                 }
             },
-            Inst::Not(reg1, reg2) => {
+            (_pos, Inst::Not(reg1, reg2)) => {
                 self.x[reg1 as usize] = (!(self.x[reg2 as usize] as RegisterType)) as RegisterType;
             },
-            Inst::And(reg1, reg2, reg3) => {
+            (_pos, Inst::And(reg1, reg2, reg3)) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize] & self.x[reg3 as usize];
             },
-            Inst::Or(reg1, reg2, reg3) => {
+            (_pos, Inst::Or(reg1, reg2, reg3)) => {
                 self.x[reg1 as usize] = self.x[reg2 as usize] | self.x[reg3 as usize];
             },
-            Inst::Ecall => {
+            (_pos, Inst::Ecall) => {
                 let syscall_no = riscv32::Sysno::try_from(self.x[Registers::Argument7 as usize]).unwrap();
                 let x86_no = syscall_no.name().parse().unwrap();
                 // self.dump();
@@ -169,22 +171,21 @@ impl Cpu {
 
                 // println!("{:?}", syscall_no);
             },
-            Inst::JumpAndLinkReturn(rd, rs1, imm) => {
+            (_pos, Inst::JumpAndLinkReturn(rd, rs1, imm)) => {
                 // TODO: This might be disastrous
-                self.x[rd as usize] = (self.pc + 1) as u32;
-                self.pc = (self.x[rs1 as usize] as i64 + (imm as i64)/4) as usize;
-                return false;
-                // self.dump();
-            },
-            Inst::JumpAndLink(rd, imm) => {
-                self.x[rd as usize] = (self.pc + 1) as u32;
-                self.pc = (self.pc as i64 + (imm as i64)/4) as usize;
+                self.x[rd as usize] = self.program_memory[self.pc+1].0 as u32;
+                self.jump_to(self.x[rs1 as usize] as isize + imm as isize);
                 return false;
             },
-            Inst::Dump => {
+            (pos, Inst::JumpAndLink(rd, imm)) => {
+                self.x[rd as usize] = self.program_memory[self.pc+1].0 as u32;
+                self.jump_to(pos as isize + imm as isize);
+                return false;
+            },
+            (_pos, Inst::Dump) => {
                 self.dump();
             },
-            Inst::LoadImmediate(reg, imm) => {
+            (_pos, Inst::LoadImmediate(reg, imm)) => {
                 self.x[reg as usize] = imm as u32;
             },
             _ => {
@@ -203,7 +204,7 @@ impl Cpu {
     }
 
     pub fn run(&mut self) {
-        while self.program_memory[self.pc] != Inst::Exit {
+        while self.program_memory[self.pc].1 != Inst::Exit {
             // println!("Stepping, pc = {}, inst = {:?}, regs: {:?}", self.pc,
             //     self.program_memory[self.pc], self.x);
             self.step();
@@ -211,7 +212,7 @@ impl Cpu {
     }
 
     pub fn debug_mode(&mut self) {
-        while self.program_memory[self.pc] != Inst::Exit {
+        while self.program_memory[self.pc].1 != Inst::Exit {
             print!("> ");
             io::stdout().flush().unwrap();
             let mut line = String::new();
@@ -226,7 +227,7 @@ impl Cpu {
             } else if line.trim() == "inst" {
                 println!("{}: {:?}", self.pc, self.program_memory[self.pc]);
             } else if line.trim() == "insts" {
-                for (i, inst) in self.program_memory.into_iter().enumerate() {
+                for (i, (_, inst)) in self.program_memory.into_iter().enumerate() {
                     if inst == Inst::Exit {
                         break;
                     }
@@ -262,10 +263,42 @@ impl Cpu {
         self.run();
     }
 
-    pub fn set_instructions(&mut self, program: Vec<Inst>) {
+    pub fn set_instructions_debug(&mut self, program: Vec<Inst>) {
+        let mut i = 0;
         for (pc, inst) in program.into_iter().enumerate() {
-            self.program_memory[pc] = inst;
+            self.program_memory[pc].0 = i;
+            self.program_memory[pc].1 = inst;
+            i += 4;
         }
+    }
+
+    pub fn set_instructions(&mut self, program: Vec<(usize, Inst)>) {
+        for (pc, (pos, inst)) in program.into_iter().enumerate() {
+            self.program_memory[pc].0 = pos;
+            self.program_memory[pc].1 = inst;
+        }
+    }
+
+    pub fn set_program(&mut self, program: Program) {
+        let entry_offset = self.entry_address as usize-self.program_start as usize;
+        let mut off = 0;
+        let mut inst_count = 0;
+        let mut starting_pc = 0;
+        self.set_instructions(program
+            .map(|inst| {
+                let res = (off, Inst::try_from(inst).expect(format!("inst 0x{inst:08x?}").as_str()));
+                match inst {
+                    RawInst::Compressed(_) => off += 2,
+                    RawInst::Normal(_) => off += 4
+                }
+                inst_count += 1;
+                if off == entry_offset {
+                    starting_pc = inst_count;
+                }
+                return res;
+            })
+            .collect());
+        self.pc = starting_pc;
     }
 
     pub fn load_elf(&mut self, buffer: &Vec<u8>) {
@@ -328,24 +361,7 @@ impl Cpu {
             .chunks_exact(2)
             .map(|chunk| u16::from_le_bytes(chunk.try_into().unwrap()))
             .collect::<Vec<u16>>());
-        let entry_offset = self.entry_address as usize-self.program_start as usize;
-        let mut off = 0;
-        let mut inst_count = 0;
-        let mut starting_pc = 0;
-        self.set_instructions(program
-            .map(|inst| {
-                match inst {
-                    RawInst::Compressed(_) => off += 2,
-                    RawInst::Normal(_) => off += 4
-                }
-                inst_count += 1;
-                if off == entry_offset {
-                    starting_pc = inst_count;
-                }
-                Inst::try_from(inst).expect(format!("inst 0x{inst:08x?}").as_str())
-            })
-            .collect());
-        self.pc = starting_pc;
+        self.set_program(program);
     }
 
     fn dump(&self) {
@@ -356,5 +372,15 @@ impl Cpu {
         println!("Instructions: {:?}", &self.program_memory[0..32]);
         println!("Heap: {:?}", &self.heap[0..32]);
         println!("---");
+    }
+
+    fn jump_to(&mut self, target: isize) {
+        let mut pos = self.program_memory[self.pc].0 as isize;
+        let offset = target-pos;
+        let direction = offset/offset.abs();
+        while target != pos {
+            self.pc = (self.pc as isize + direction) as usize;
+            pos = self.program_memory[self.pc].0 as isize;
+        }
     }
 }

@@ -52,11 +52,11 @@ mod tests {
         cpu.pc = 2;
         cpu.program_start = 0x10000 as *mut u8;
         let pc_addr = cpu.program_start as usize+cpu.pc*4;
-        cpu.program_memory[2] = Inst::AddUpperImmediateToPc(1, 0x12345000);
+        cpu.program_memory[2] = (8, Inst::AddUpperImmediateToPc(1, 0x12345000));
         cpu.run_inst();
         assert_eq!(cpu.x[1], pc_addr as u32+0x12345000);
 
-        cpu.program_memory[2] = Inst::AddUpperImmediateToPc(1, -0x1000);
+        cpu.program_memory[2] = (8, Inst::AddUpperImmediateToPc(1, -0x1000));
         cpu.run_inst();
         assert_eq!(cpu.x[1], pc_addr as u32-0x1000);
     }
@@ -64,7 +64,7 @@ mod tests {
     #[test]
     fn test_fibonacci() {
         let mut cpu: Cpu = Cpu::default();
-        cpu.set_instructions(vec![
+        cpu.set_instructions_debug(vec![
             Inst::AddImmediate(10, 10, 0),       // a
             Inst::AddImmediate(1, 1, 1),       // b
             Inst::AddImmediate(4, 4, 15),      // limit
@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn test_memory() {
         let mut cpu: Cpu = Cpu::default();
-        cpu.set_instructions(vec![
+        cpu.set_instructions_debug(vec![
             Inst::AddImmediate(10, 10, 69), // val
             Inst::AddImmediate(1, 1, 100), // addr
             Inst::StoreWord(10, 0, 1),
@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn test_rule110() {
         let mut cpu: Cpu = Cpu::default();
-        cpu.set_instructions(vec![
+        cpu.set_instructions_debug(vec![
             Inst::AddImmediate(12, 0, 1),       // First 1
             Inst::AddImmediate(3, 0, 0),       // Addr
             Inst::StoreWord(12, 0, 3),       // store
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn test_and() {
         let mut cpu = Cpu::default();
-        cpu.set_instructions(vec![
+        cpu.set_instructions_debug(vec![
             Inst::AddImmediate(10, 10, 1),
             Inst::AddImmediate(1, 1, 0),
             Inst::And(3, 1, 1),
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn test_or() {
         let mut cpu = Cpu::default();
-        cpu.set_instructions(vec![
+        cpu.set_instructions_debug(vec![
             Inst::AddImmediate(10, 0, 1),
             Inst::AddImmediate(1, 1, 0),
             Inst::Or(3, 1, 1),
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn test_xor() {
         let mut cpu = Cpu::default();
-        cpu.set_instructions(vec![
+        cpu.set_instructions_debug(vec![
             Inst::AddImmediate(10, 10, 1),
             Inst::AddImmediate(1, 1, 0),
             Inst::Xor(3, 1, 1),
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn test_xor2() {
         let mut cpu = Cpu::default();
-        cpu.set_instructions(vec![
+        cpu.set_instructions_debug(vec![
             Inst::AddImmediate(10, 10, 1),
             Inst::AddImmediate(1, 1, 0),
             Inst::Xor(3, 1, 10),
